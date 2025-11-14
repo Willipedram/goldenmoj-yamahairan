@@ -1,9 +1,9 @@
 <?php
 /**
  * Plugin Name: Yamaha Iran Woo Importer
- * Description: Imports products from yamahairan.ir into WooCommerce by scraping their product pages.
- * Version: 1.0.0
- * Author: OpenAI Assistant
+ * Description: Scrape YamahaIran.ir product pages into WooCommerce with live progress, automatic category creation, and localized media handling.
+ * Version: 1.1.0
+ * Author: سید پدرام نخستین
  */
 
 if (!defined('ABSPATH')) {
@@ -36,7 +36,8 @@ class YamahaIran_Woo_Importer {
      */
     private function __construct() {
         add_action('admin_menu', [$this, 'register_admin_page']);
-        add_action('admin_init', [$this, 'maybe_process_form']);
+        add_action('admin_enqueue_scripts', [$this, 'enqueue_assets']);
+        add_action('wp_ajax_yamahairan_import_product', [$this, 'handle_ajax_import']);
     }
 
     /**
@@ -61,130 +62,144 @@ class YamahaIran_Woo_Importer {
             wp_die(__('You do not have permission to access this page.', 'yamahairan-woo-importer'));
         }
 
-        $messages = get_transient('yamahairan_importer_messages');
-        if ($messages) {
-            delete_transient('yamahairan_importer_messages');
-        }
-
         ?>
-        <div class="wrap">
-            <h1><?php esc_html_e('Yamaha Iran WooCommerce Importer', 'yamahairan-woo-importer'); ?></h1>
-            <p><?php esc_html_e('Paste one YamahaIran product URL per line. The importer will scrape the product content, remove all links, download the media to your library, and create WooCommerce products in draft status.', 'yamahairan-woo-importer'); ?></p>
+        <div class="wrap yamahairan-importer">
+            <h1 class="wp-heading-inline"><?php esc_html_e('Yamaha Iran WooCommerce Importer', 'yamahairan-woo-importer'); ?></h1>
+            <p class="yamahairan-intro">
+                <?php esc_html_e('Paste YamahaIran.ir product links and launch the importer to copy descriptions, media, attributes, and categories directly into WooCommerce.', 'yamahairan-woo-importer'); ?>
+            </p>
 
-            <?php if (!empty($messages['errors'])) : ?>
-                <div class="notice notice-error">
-                    <p><strong><?php esc_html_e('Import Errors:', 'yamahairan-woo-importer'); ?></strong></p>
-                    <ul>
-                        <?php foreach ($messages['errors'] as $error) : ?>
-                            <li><?php echo esc_html($error); ?></li>
-                        <?php endforeach; ?>
-                    </ul>
-                </div>
-            <?php endif; ?>
+            <div class="yamahairan-layout">
+                <div class="yamahairan-card">
+                    <form id="yamahairan-import-form" class="yamahairan-form" method="post">
+                        <?php wp_nonce_field('yamahairan_importer_form', 'yamahairan_importer_nonce'); ?>
+                        <div class="yamahairan-field">
+                            <label class="yamahairan-label" for="yamahairan_product_urls"><?php esc_html_e('Product URLs', 'yamahairan-woo-importer'); ?></label>
+                            <textarea name="yamahairan_product_urls" id="yamahairan_product_urls" rows="6" class="yamahairan-textarea" placeholder="https://yamahairan.ir/product/detail/939-YDP-145"></textarea>
+                            <p class="description"><?php esc_html_e('Enter one YamahaIran product link per line. The importer strips all hyperlinks automatically.', 'yamahairan-woo-importer'); ?></p>
+                        </div>
 
-            <?php if (!empty($messages['success'])) : ?>
-                <div class="notice notice-success">
-                    <p><strong><?php esc_html_e('Import Results:', 'yamahairan-woo-importer'); ?></strong></p>
-                    <ul>
-                        <?php foreach ($messages['success'] as $success) : ?>
-                            <li><?php echo esc_html($success); ?></li>
-                        <?php endforeach; ?>
-                    </ul>
-                </div>
-            <?php endif; ?>
-
-            <form method="post">
-                <?php wp_nonce_field('yamahairan_importer', 'yamahairan_importer_nonce'); ?>
-                <table class="form-table">
-                    <tr>
-                        <th scope="row">
-                            <label for="yamahairan_product_urls"><?php esc_html_e('Product URLs', 'yamahairan-woo-importer'); ?></label>
-                        </th>
-                        <td>
-                            <textarea name="yamahairan_product_urls" id="yamahairan_product_urls" rows="6" cols="80" class="large-text" placeholder="https://yamahairan.ir/product/detail/939-YDP-145"></textarea>
-                            <p class="description"><?php esc_html_e('Each line should contain a full product URL from yamahairan.ir.', 'yamahairan-woo-importer'); ?></p>
-                        </td>
-                    </tr>
-                    <tr>
-                        <th scope="row">
-                            <label for="yamahairan_product_status"><?php esc_html_e('Product status', 'yamahairan-woo-importer'); ?></label>
-                        </th>
-                        <td>
-                            <select name="yamahairan_product_status" id="yamahairan_product_status">
+                        <div class="yamahairan-field">
+                            <label class="yamahairan-label" for="yamahairan_product_status"><?php esc_html_e('Product status', 'yamahairan-woo-importer'); ?></label>
+                            <select name="yamahairan_product_status" id="yamahairan_product_status" class="yamahairan-select">
                                 <option value="draft"><?php esc_html_e('Draft', 'yamahairan-woo-importer'); ?></option>
                                 <option value="pending"><?php esc_html_e('Pending Review', 'yamahairan-woo-importer'); ?></option>
                                 <option value="publish"><?php esc_html_e('Published', 'yamahairan-woo-importer'); ?></option>
                             </select>
-                            <p class="description"><?php esc_html_e('Select the status for the newly created products.', 'yamahairan-woo-importer'); ?></p>
-                        </td>
-                    </tr>
-                </table>
-                <?php submit_button(__('Import Products', 'yamahairan-woo-importer')); ?>
-            </form>
+                            <p class="description"><?php esc_html_e('Choose the publication state for imported products.', 'yamahairan-woo-importer'); ?></p>
+                        </div>
+
+                        <div class="yamahairan-actions">
+                            <?php submit_button(__('Start Import', 'yamahairan-woo-importer'), 'primary yamahairan-submit', 'yamahairan_import_submit', false); ?>
+                        </div>
+                    </form>
+                </div>
+
+                <div class="yamahairan-card yamahairan-live-status" aria-live="polite">
+                    <h2 class="yamahairan-card__title"><?php esc_html_e('Live progress', 'yamahairan-woo-importer'); ?></h2>
+                    <div class="yamahairan-progress" id="yamahairan-progress" hidden>
+                        <div class="yamahairan-progress__bar">
+                            <span class="yamahairan-progress__value" id="yamahairan-progress-value" style="width: 0%;"></span>
+                        </div>
+                        <p class="yamahairan-progress__label" id="yamahairan-progress-label"><?php esc_html_e('Waiting to start…', 'yamahairan-woo-importer'); ?></p>
+                    </div>
+                    <div class="yamahairan-log" id="yamahairan-log" hidden>
+                        <h3 class="yamahairan-log__title"><?php esc_html_e('Technical log', 'yamahairan-woo-importer'); ?></h3>
+                        <ul class="yamahairan-log__list" id="yamahairan-log-list"></ul>
+                    </div>
+                </div>
+            </div>
         </div>
         <?php
     }
 
     /**
+     * Enqueue admin assets for the importer interface.
+     *
+     * @param string $hook Current admin page hook.
+     */
+    public function enqueue_assets($hook) {
+        if ('woocommerce_page_yamahairan-woo-importer' !== $hook) {
+            return;
+        }
+
+        $version = '1.1.0';
+        wp_enqueue_style(
+            'yamahairan-importer-admin',
+            plugin_dir_url(__FILE__) . 'assets/css/importer-admin.css',
+            [],
+            $version
+        );
+
+        wp_enqueue_script(
+            'yamahairan-importer-admin',
+            plugin_dir_url(__FILE__) . 'assets/js/importer-admin.js',
+            [],
+            $version,
+            true
+        );
+
+        wp_localize_script(
+            'yamahairan-importer-admin',
+            'yamahairanImporter',
+            [
+                'nonce'   => wp_create_nonce('yamahairan_import_product'),
+                'ajaxUrl' => admin_url('admin-ajax.php'),
+                'i18n'    => [
+                    'processing'     => __('Processing product %1$d of %2$d', 'yamahairan-woo-importer'),
+                    'complete'       => __('All products imported successfully.', 'yamahairan-woo-importer'),
+                    'error'          => __('An unexpected error occurred.', 'yamahairan-woo-importer'),
+                    'ready'          => __('Waiting to start…', 'yamahairan-woo-importer'),
+                    'invalidRequest' => __('Please provide at least one product URL.', 'yamahairan-woo-importer'),
+                ],
+            ]
+        );
+    }
+
+    /**
      * Process the importer form when submitted.
      */
-    public function maybe_process_form() {
-        if (!is_admin() || empty($_POST['yamahairan_importer_nonce'])) {
-            return;
-        }
-
-        if (!isset($_POST['yamahairan_product_urls'])) {
-            return;
-        }
-
-        if (!wp_verify_nonce(sanitize_key($_POST['yamahairan_importer_nonce']), 'yamahairan_importer')) {
-            return;
-        }
+    public function handle_ajax_import() {
+        check_ajax_referer('yamahairan_import_product', 'nonce');
 
         if (!current_user_can('manage_woocommerce')) {
-            return;
+            wp_send_json_error([
+                'messages' => [__('You do not have permission to import products.', 'yamahairan-woo-importer')],
+            ]);
         }
 
-        $urls_raw = sanitize_textarea_field(wp_unslash($_POST['yamahairan_product_urls']));
-        $status   = isset($_POST['yamahairan_product_status']) ? sanitize_key(wp_unslash($_POST['yamahairan_product_status'])) : 'draft';
+        $url    = isset($_POST['url']) ? esc_url_raw(wp_unslash($_POST['url'])) : '';
+        $status = isset($_POST['status']) ? sanitize_key(wp_unslash($_POST['status'])) : 'draft';
 
-        $urls = array_filter(array_map('trim', explode("\n", $urls_raw)));
-
-        if (empty($urls)) {
-            set_transient('yamahairan_importer_messages', [
-                'errors' => [__('No product URLs were provided.', 'yamahairan-woo-importer')],
-            ], 30);
-
-            wp_safe_redirect(add_query_arg([], menu_page_url('yamahairan-woo-importer', false)));
-            exit;
+        if (empty($url)) {
+            wp_send_json_error([
+                'messages' => [__('No product URL provided.', 'yamahairan-woo-importer')],
+            ]);
         }
 
-        $messages = [
-            'success' => [],
-            'errors'  => [],
-        ];
+        $log    = [];
+        $result = $this->import_product_from_url($url, $status, $log);
 
-        foreach ($urls as $url) {
-            $result = $this->import_product_from_url($url, $status);
-
-            if (is_wp_error($result)) {
-                $messages['errors'][] = sprintf(
-                    /* translators: %s: error message */
-                    __('%1$s → %2$s', 'yamahairan-woo-importer'),
-                    $url,
-                    $result->get_error_message()
-                );
-            } else {
-                $messages['success'][] = sprintf(
-                    __('Imported product #%d successfully.', 'yamahairan-woo-importer'),
-                    $result
-                );
-            }
+        if (is_wp_error($result)) {
+            $log[] = $result->get_error_message();
+            wp_send_json_error([
+                'messages' => $log,
+            ]);
         }
 
-        set_transient('yamahairan_importer_messages', $messages, 30);
-        wp_safe_redirect(add_query_arg([], menu_page_url('yamahairan-woo-importer', false)));
-        exit;
+        $edit_link = get_edit_post_link($result, '');
+        if ($edit_link) {
+            $log[] = sprintf(
+                '<a href="%s" target="_blank" rel="noopener noreferrer">%s</a>',
+                esc_url($edit_link),
+                sprintf(__('Open product #%d in a new tab.', 'yamahairan-woo-importer'), $result)
+            );
+        }
+
+        wp_send_json_success([
+            'product_id' => $result,
+            'messages'   => $log,
+        ]);
     }
 
     /**
@@ -195,11 +210,14 @@ class YamahaIran_Woo_Importer {
      *
      * @return int|WP_Error  Newly created product ID on success.
      */
-    private function import_product_from_url($url, $status = 'draft') {
+    private function import_product_from_url($url, $status = 'draft', array &$log = []) {
+        $this->log_step($log, sprintf(__('Starting import for %s', 'yamahairan-woo-importer'), esc_url($url)));
+
         if (!filter_var($url, FILTER_VALIDATE_URL)) {
             return new WP_Error('invalid_url', __('The provided URL is invalid.', 'yamahairan-woo-importer'));
         }
 
+        $this->log_step($log, __('Requesting product page…', 'yamahairan-woo-importer'));
         $response = wp_remote_get($url, [
             'timeout' => 20,
             'headers' => [
@@ -212,6 +230,7 @@ class YamahaIran_Woo_Importer {
         }
 
         $code = wp_remote_retrieve_response_code($response);
+        $this->log_step($log, sprintf(__('Received response code %d', 'yamahairan-woo-importer'), (int) $code));
         if (200 !== $code) {
             return new WP_Error('invalid_response_code', sprintf(__('Unexpected HTTP status: %d', 'yamahairan-woo-importer'), $code));
         }
@@ -221,19 +240,25 @@ class YamahaIran_Woo_Importer {
             return new WP_Error('empty_body', __('The product page returned no content.', 'yamahairan-woo-importer'));
         }
 
+        $this->log_step($log, __('Parsing HTML content…', 'yamahairan-woo-importer'));
         $document = $this->create_dom_document($body);
         if (!$document) {
             return new WP_Error('dom_parse_error', __('Unable to parse product HTML.', 'yamahairan-woo-importer'));
         }
 
-        $xpath = new DOMXPath($document);
-
-        $metadata = $this->extract_ld_json($document);
-        $title    = $metadata['name'] ?? $this->extract_title($xpath);
-        $price    = $metadata['offers']['price'] ?? '';
+        $xpath     = new DOMXPath($document);
+        $metadata  = $this->extract_ld_json($document);
+        $title     = $metadata['name'] ?? $this->extract_title($xpath);
+        $price     = $metadata['offers']['price'] ?? '';
+        $categories = $this->extract_categories($document, $xpath, $metadata);
 
         if (empty($title)) {
             return new WP_Error('missing_title', __('The product title could not be found.', 'yamahairan-woo-importer'));
+        }
+        $this->log_step($log, sprintf(__('Detected title: %s', 'yamahairan-woo-importer'), wp_strip_all_tags($title)));
+
+        if (!empty($categories)) {
+            $this->log_step($log, sprintf(__('Detected categories: %s', 'yamahairan-woo-importer'), implode(' › ', $categories)));
         }
 
         $description_html = $metadata['description'] ?? $this->extract_description($xpath, $document);
@@ -245,8 +270,12 @@ class YamahaIran_Woo_Importer {
         if (empty($images)) {
             return new WP_Error('missing_images', __('No product images were detected.', 'yamahairan-woo-importer'));
         }
+        $this->log_step($log, sprintf(__('Found %d image(s)', 'yamahairan-woo-importer'), count($images)));
 
         $attributes = $this->extract_attributes($xpath, $document);
+        if (!empty($attributes)) {
+            $this->log_step($log, sprintf(__('Extracted %d technical attribute(s)', 'yamahairan-woo-importer'), count($attributes)));
+        }
 
         $product_data = [
             'post_title'   => wp_strip_all_tags($title),
@@ -260,6 +289,7 @@ class YamahaIran_Woo_Importer {
         if (is_wp_error($product_id)) {
             return $product_id;
         }
+        $this->log_step($log, sprintf(__('Created product draft #%d', 'yamahairan-woo-importer'), $product_id));
 
         if (taxonomy_exists('product_type')) {
             wp_set_object_terms($product_id, 'simple', 'product_type');
@@ -277,6 +307,7 @@ class YamahaIran_Woo_Importer {
         if ('' !== $normalized_price) {
             update_post_meta($product_id, '_regular_price', $normalized_price);
             update_post_meta($product_id, '_price', $normalized_price);
+            $this->log_step($log, sprintf(__('Applied price: %s', 'yamahairan-woo-importer'), $normalized_price));
         }
 
         update_post_meta($product_id, '_manage_stock', 'no');
@@ -286,7 +317,7 @@ class YamahaIran_Woo_Importer {
             wc_update_product_stock_status($product_id, 'instock');
         }
 
-        $attachment_ids = $this->import_images($product_id, $images, $title);
+        $attachment_ids = $this->import_images($product_id, $images, $title, $log);
         if (empty($attachment_ids)) {
             wp_trash_post($product_id);
             return new WP_Error('image_import_failed', __('Could not download product images.', 'yamahairan-woo-importer'));
@@ -296,12 +327,19 @@ class YamahaIran_Woo_Importer {
         if (count($attachment_ids) > 1) {
             update_post_meta($product_id, '_product_image_gallery', implode(',', array_slice($attachment_ids, 1)));
         }
+        $this->log_step($log, __('Assigned product gallery images.', 'yamahairan-woo-importer'));
 
         if (!empty($attributes)) {
             $this->assign_product_attributes($product_id, $attributes);
+            $this->log_step($log, __('Saved technical specifications to product attributes.', 'yamahairan-woo-importer'));
+        }
+
+        if (!empty($categories)) {
+            $this->assign_categories($product_id, $categories, $log);
         }
 
         do_action('yamahairan_woo_importer_product_imported', $product_id, $url, $metadata);
+        $this->log_step($log, __('Import finished successfully.', 'yamahairan-woo-importer'));
 
         return $product_id;
     }
@@ -366,6 +404,117 @@ class YamahaIran_Woo_Importer {
         }
 
         return is_array($data) ? $data : [];
+    }
+
+    /**
+     * Extract product categories from available metadata or markup.
+     *
+     * @param DOMDocument $document DOMDocument instance.
+     * @param DOMXPath    $xpath    DOMXPath instance.
+     * @param array       $metadata JSON-LD product metadata.
+     *
+     * @return array<int, string>
+     */
+    private function extract_categories(DOMDocument $document, DOMXPath $xpath, array $metadata) {
+        $categories = [];
+
+        if (!empty($metadata['category'])) {
+            $raw_category = $metadata['category'];
+            if (is_array($raw_category)) {
+                $categories = array_merge($categories, $raw_category);
+            } else {
+                $categories = array_merge(
+                    $categories,
+                    preg_split('/[›>\|]/u', (string) $raw_category) ?: []
+                );
+            }
+        }
+
+        foreach ($document->getElementsByTagName('script') as $script) {
+            if ('application/ld+json' !== $script->getAttribute('type')) {
+                continue;
+            }
+
+            $decoded = json_decode(trim($script->textContent), true);
+            if (empty($decoded)) {
+                continue;
+            }
+
+            $breadcrumb_lists = [];
+
+            if (isset($decoded['@type']) && 'BreadcrumbList' === $decoded['@type']) {
+                $breadcrumb_lists[] = $decoded;
+            }
+
+            if (isset($decoded['@graph']) && is_array($decoded['@graph'])) {
+                foreach ($decoded['@graph'] as $item) {
+                    if (isset($item['@type']) && 'BreadcrumbList' === $item['@type']) {
+                        $breadcrumb_lists[] = $item;
+                    }
+                }
+            }
+
+            foreach ($breadcrumb_lists as $list) {
+                if (empty($list['itemListElement']) || !is_array($list['itemListElement'])) {
+                    continue;
+                }
+
+                foreach ($list['itemListElement'] as $element) {
+                    if (isset($element['item']['name'])) {
+                        $categories[] = $element['item']['name'];
+                    } elseif (isset($element['name'])) {
+                        $categories[] = $element['name'];
+                    }
+                }
+            }
+        }
+
+        $breadcrumb_queries = [
+            "//nav[contains(@class,'breadcrumb')]//a",
+            "//ul[contains(@class,'breadcrumb')]//a",
+            "//ol[contains(@class,'breadcrumb')]//a",
+            "//div[contains(@class,'breadcrumb')]//a",
+        ];
+
+        foreach ($breadcrumb_queries as $query) {
+            $nodes = $xpath->query($query);
+            if (!$nodes) {
+                continue;
+            }
+
+            foreach ($nodes as $node) {
+                $categories[] = $node->textContent;
+            }
+        }
+
+        $product_title = isset($metadata['name']) ? wp_strip_all_tags($metadata['name']) : '';
+
+        $categories = array_map('wp_strip_all_tags', $categories);
+        $categories = array_map('trim', $categories);
+        $categories = array_filter($categories, function ($value) use ($product_title) {
+            if ('' === $value) {
+                return false;
+            }
+
+            $normalized = function_exists('mb_strtolower') ? mb_strtolower($value) : strtolower($value);
+            if (in_array($normalized, ['home', 'خانه'], true)) {
+                return false;
+            }
+
+            if ($product_title && $value === $product_title) {
+                return false;
+            }
+
+            return true;
+        });
+
+        if (empty($categories)) {
+            return [];
+        }
+
+        $categories = array_values(array_unique($categories, SORT_REGULAR));
+
+        return $categories;
     }
 
     /**
@@ -544,6 +693,70 @@ class YamahaIran_Woo_Importer {
     }
 
     /**
+     * Assign detected categories to the WooCommerce product, creating them if necessary.
+     *
+     * @param int              $product_id Product ID.
+     * @param array<int,string> $categories Ordered list of categories.
+     * @param array<int,string> $log        Reference to live log collection.
+     */
+    private function assign_categories($product_id, array $categories, array &$log) {
+        if (!taxonomy_exists('product_cat')) {
+            $this->log_step($log, __('Product categories taxonomy is unavailable.', 'yamahairan-woo-importer'));
+            return;
+        }
+
+        $parent    = 0;
+        $assigned  = [];
+        $processed = [];
+
+        foreach ($categories as $category_name) {
+            $category_name = trim(wp_strip_all_tags($category_name));
+            if ('' === $category_name) {
+                continue;
+            }
+
+            if (in_array($category_name, $processed, true)) {
+                continue;
+            }
+            $processed[] = $category_name;
+
+            $term = term_exists($category_name, 'product_cat', $parent);
+
+            if (!$term) {
+                $inserted = wp_insert_term($category_name, 'product_cat', [
+                    'parent' => $parent,
+                ]);
+
+                if (is_wp_error($inserted)) {
+                    $this->log_step(
+                        $log,
+                        sprintf(
+                            __('Failed to create category %1$s: %2$s', 'yamahairan-woo-importer'),
+                            $category_name,
+                            $inserted->get_error_message()
+                        )
+                    );
+                    continue;
+                }
+
+                $term_id = (int) $inserted['term_id'];
+                $this->log_step($log, sprintf(__('Created category: %s', 'yamahairan-woo-importer'), $category_name));
+            } else {
+                $term_id = is_array($term) ? (int) $term['term_id'] : (int) $term;
+                $this->log_step($log, sprintf(__('Using existing category: %s', 'yamahairan-woo-importer'), $category_name));
+            }
+
+            $assigned[] = $term_id;
+            $parent     = $term_id;
+        }
+
+        if (!empty($assigned)) {
+            wp_set_object_terms($product_id, $assigned, 'product_cat');
+            $this->log_step($log, __('Categories assigned to product.', 'yamahairan-woo-importer'));
+        }
+    }
+
+    /**
      * Import images to the media library and return attachment IDs.
      *
      * @param int    $product_id Product ID.
@@ -552,15 +765,35 @@ class YamahaIran_Woo_Importer {
      *
      * @return array<int, int>
      */
-    private function import_images($product_id, array $images, $title) {
+    private function import_images($product_id, array $images, $title, array &$log) {
         $attachment_ids = [];
 
         $this->prepare_media_environment();
 
-        foreach ($images as $image_url) {
+        $total = count($images);
+        foreach ($images as $index => $image_url) {
+            $this->log_step(
+                $log,
+                sprintf(
+                    __('Downloading image %1$d of %2$d', 'yamahairan-woo-importer'),
+                    $index + 1,
+                    $total
+                )
+            );
+
             $sideloaded = media_sideload_image($image_url, $product_id, $title, 'id');
             if (!is_wp_error($sideloaded)) {
                 $attachment_ids[] = $sideloaded;
+                $this->log_step($log, sprintf(__('Image saved: %s', 'yamahairan-woo-importer'), esc_url($image_url)));
+            } else {
+                $this->log_step(
+                    $log,
+                    sprintf(
+                        __('Image failed: %1$s (%2$s)', 'yamahairan-woo-importer'),
+                        esc_url($image_url),
+                        $sideloaded->get_error_message()
+                    )
+                );
             }
         }
 
@@ -710,6 +943,16 @@ class YamahaIran_Woo_Importer {
 
         $path = isset($base_parts['path']) ? rtrim(dirname($base_parts['path']), '/') : '';
         return sprintf('%s://%s%s/%s', $scheme, $host, $path, ltrim($url, '/'));
+    }
+
+    /**
+     * Append a message to the live import log.
+     *
+     * @param array<int,string> $log     Log container reference.
+     * @param string            $message Message to append.
+     */
+    private function log_step(array &$log, $message) {
+        $log[] = wp_kses_post($message);
     }
 }
 
